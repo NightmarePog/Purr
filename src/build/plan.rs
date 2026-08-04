@@ -36,6 +36,14 @@ impl BuildResult {
         }
     }
 
+    pub fn install_wrappers(&self) -> Result<(), BuildError> {
+        self.paths
+            .iter()
+            .try_for_each(|artifact| crate::launcher::install_for_artifact(artifact).map(|_| ()))?;
+
+        Ok(())
+    }
+
     fn append(&mut self, mut result: Self) {
         self.paths.append(&mut result.paths);
     }

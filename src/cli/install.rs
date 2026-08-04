@@ -41,6 +41,8 @@ pub fn install<'a, T: IntoIterator<Item = &'a str>>(
     ui::success(format_args!("built {} artifact(s)", result.artifacts()));
     ui::step("Installing packages");
     result.install()?;
+    ui::step("Installing application wrappers");
+    result.install_wrappers()?;
     ui::success("installed packages");
     Ok(())
 }

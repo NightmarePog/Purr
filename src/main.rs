@@ -3,6 +3,7 @@ mod build;
 mod cli;
 mod config;
 mod dependency;
+mod launcher;
 mod sandbox;
 mod ui;
 
@@ -32,10 +33,29 @@ fn dispatch() -> Result<(), cli::CliError> {
             ui::command("install", &packages.join(", "));
             cli::install::install(packages.iter().map(String::as_str), cli.verbose)
         }
-        cli::Command::Run { package } => {
-            ui::command("run", &package);
-            cli::run::run(package)
+        cli::Command::Run {
+            package,
+            entry,
+            args,
+        } => {
+            ui::command(
+                "run",
+                package
+                    .as_deref()
+                    .or_else(|| entry.as_deref().and_then(|path| path.to_str()))
+                    .unwrap_or("entry point"),
+            );
+            cli::run::run(package, entry, args)
         }
+        cli::Command::WrapperInstall { original, stored } => crate::launcher::Wrapper::new(
+            &original,
+        )
+        .and_then(|wrapper| wrapper.install_as_root(&stored))
+        .map_err(crate::launcher::LauncherError::from)
+        .map_err(cli::CliError::from),
+        cli::Command::WrapperRestoreAll => crate::launcher::restore_all_as_root()
+            .map_err(crate::launcher::LauncherError::from)
+            .map_err(cli::CliError::from),
         cli::Command::Remove { package } => {
             ui::command("remove", &package);
             cli::remove::remove(package)

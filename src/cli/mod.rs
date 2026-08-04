@@ -37,6 +37,9 @@ pub enum CliError {
     #[error(transparent)]
     Ui(#[from] ui::UiError),
 
+    #[error(transparent)]
+    Launcher(#[from] crate::launcher::LauncherError),
+
     #[error("user cancelled")]
     UserCancelled,
 }
@@ -61,8 +64,20 @@ pub enum Command {
     },
     Run {
         #[arg(value_name = "PACKAGE")]
-        package: String,
+        package: Option<String>,
+
+        #[arg(long, value_name = "PATH", conflicts_with = "package", hide = true)]
+        entry: Option<PathBuf>,
+
+        #[arg(trailing_var_arg = true, value_name = "ARG")]
+        args: Vec<String>,
     },
+
+    #[command(name = "__wrapper-install", hide = true)]
+    WrapperInstall { original: PathBuf, stored: PathBuf },
+
+    #[command(name = "__wrapper-restore-all", hide = true)]
+    WrapperRestoreAll,
     Remove {
         #[arg(value_name = "PACKAGE")]
         package: String,

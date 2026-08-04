@@ -53,6 +53,10 @@ impl Builder {
         self.arg("--die-with-parent")
     }
 
+    pub fn new_session(&mut self) -> &mut Self {
+        self.arg("--new-session")
+    }
+
     pub fn ro_bind(&mut self, src: impl Into<OsString>, dst: impl Into<OsString>) -> &mut Self {
         self.args(["--ro-bind"]).arg(src).arg(dst)
     }

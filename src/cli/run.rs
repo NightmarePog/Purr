@@ -1,6 +1,10 @@
-pub fn run(package: String) -> Result<(), crate::cli::CliError> {
-    crate::ui::step(&format!("Preparing to run {package}"));
-    crate::ui::info("Run support is not implemented yet");
+use std::path::PathBuf;
 
+pub fn run(
+    package: Option<String>,
+    entry: Option<PathBuf>,
+    args: Vec<String>,
+) -> Result<(), crate::cli::CliError> {
+    crate::launcher::launch(package.as_deref(), entry.as_deref(), &args)?;
     Ok(())
 }

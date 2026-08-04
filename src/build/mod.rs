@@ -54,4 +54,7 @@ pub enum BuildError {
 
     #[error(transparent)]
     Alpm(#[from] ::alpm::Error),
+
+    #[error(transparent)]
+    Launcher(#[from] crate::launcher::LauncherError),
 }
