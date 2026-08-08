@@ -4,21 +4,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use const_format::{Case, map_ascii_case, str_replace};
+
 use alpm::{Alpm, LoadedPackage, SigLevel};
 
 use crate::build::BuildError;
 
 pub struct Database<'a>(&'a Path);
 
-
 pub struct Artifact<'a>(&'a Path);
 
 impl<'a> Database<'a> {
-
     pub const fn new(path: &'a Path) -> Self {
         Self(path)
     }
-
 
     pub fn push(&self, artifact: Artifact<'_>) -> Result<(), BuildError> {
         artifact.load(self, |package| self.register(package))
@@ -87,6 +86,25 @@ struct PackageDescription {
     content: String,
 }
 
+const ALLOWED_FIELD_NAMES: [&'static str; 16] = [
+    "NAME",
+    "VERSION",
+    "BASE",
+    "DESC",
+    "URL",
+    "ARCH",
+    "BUILDDATE",
+    "INSTALLDATE",
+    "PACKAGER",
+    "SIZE",
+    "REASON",
+    "LICENSE",
+    "VALIDATION",
+    "DEPENDS",
+    "OPTDEPENDS",
+    "PROVIDES",
+];
+
 impl PackageDescription {
     fn new() -> Self {
         Self {
@@ -94,7 +112,12 @@ impl PackageDescription {
         }
     }
 
-    fn write_field<T: Display>(mut self, name: &str, values: impl IntoIterator<Item = T>) -> Self {
+    fn write_field<T: Display>(
+        &mut self,
+        name: &str,
+        values: impl IntoIterator<Item = T>,
+    ) -> &mut Self {
+        debug_assert!(ALLOWED_FIELD_NAMES.contains(&name));
         let _ = writeln!(self.content, "%{name}%");
         values.into_iter().for_each(|value| {
             let _ = writeln!(self.content, "{value}");
@@ -109,24 +132,61 @@ impl PackageDescription {
     }
 }
 
+macro_rules! write_fields_new_fmtname {
+    ($name:ident) => {
+        str_replace!(map_ascii_case!(Case::Upper, stringify!($name)), '_', "")
+    };
+}
+
+macro_rules! write_fields_new_impl {
+    ($from:ident $self:ident) => {};
+    ($from:ident $self:ident $name:ident($($nameargs:tt)*)$(.$methodname:ident($($methodargs:tt)*))*, $($rest:tt)*) => {
+        $self.write_field(write_fields_new_fmtname!($name), [$from.$name($($nameargs)*)$(.$methodname($($methodargs)*))*]);
+        write_fields_new_impl!($from $self $($rest)*);
+    };
+    ($from:ident $self:ident ..$name:ident($($nameargs:tt)*)$(.$methodname:ident($($methodargs:tt)*))*, $($rest:tt)*) => {
+        $self.write_field(write_fields_new_fmtname!($name), $from.$name($($nameargs)*)$(.$methodname($($methodargs)*))*);
+        write_fields_new_impl!($from $self $($rest)*);
+    };
+    ($from:ident $self:ident $name:ident => $value:expr, $($rest:tt)*) => {
+        $self.write_field(write_fields_new_fmtname!($name), [$value]);
+        write_fields_new_impl!($from $self $($rest)*);
+    };
+    ($from:ident $self:ident ..$name:ident => $value:expr, $($rest:tt)*) => {
+        $self.write_field(write_fields_new_fmtname!($name), $value);
+        write_fields_new_impl!($from $self $($rest)*);
+    };
+}
+
+macro_rules! write_fields_new {
+    (from = $from:ident, {
+        $($fields:tt)+
+    }) => {{
+        let mut s = Self::new();
+        write_fields_new_impl!($from s $($fields)+);
+        s
+    }};
+}
+
 impl<'a> From<&LoadedPackage<'a>> for PackageDescription {
     fn from(package: &LoadedPackage<'a>) -> Self {
-        Self::new()
-            .write_field("NAME", [package.name()])
-            .write_field("VERSION", [package.version()])
-            .write_field("BASE", [package.base().unwrap_or(package.name())])
-            .write_field("DESC", [package.desc().unwrap_or_default()])
-            .write_field("URL", [package.url().unwrap_or_default()])
-            .write_field("ARCH", [package.arch().unwrap_or_default()])
-            .write_field("BUILDDATE", [package.build_date()])
-            .write_field("INSTALLDATE", [package.build_date()])
-            .write_field("PACKAGER", [package.packager().unwrap_or_default()])
-            .write_field("SIZE", [package.size()])
-            .write_field("REASON", [0])
-            .write_field("LICENSE", package.licenses())
-            .write_field("VALIDATION", ["none"])
-            .write_field("DEPENDS", package.depends())
-            .write_field("OPTDEPENDS", package.optdepends())
-            .write_field("PROVIDES", package.provides())
+        write_fields_new!(from = package, {
+            name(),
+            version(),
+            base().unwrap_or(package.name()),
+            desc().unwrap_or_default(),
+            url().unwrap_or_default(),
+            arch().unwrap_or_default(),
+            build_date(),
+            installdate => package.build_date(),
+            packager().unwrap_or_default(),
+            size(),
+            reason => 0,
+            ..license => package.licenses(),
+            validation => "none",
+            ..depends(),
+            ..optdepends(),
+            ..provides(),
+        })
     }
 }
