@@ -1,4 +1,5 @@
 mod input;
+mod list;
 mod output;
 mod plan;
 mod progress;
@@ -8,6 +9,7 @@ use std::fmt::{self, Display, Write as _};
 use thiserror::Error;
 
 pub use input::prompt;
+pub use list::{Entry, GroupRow, Renderer, Row, Status, hidden_line, summary};
 pub use output::{
     command, configure, error, header, info, prompt_marker, question, step, success, warn,
 };
@@ -15,7 +17,7 @@ pub use plan::{aur_details, install_plan, relative_time};
 pub use progress::{Loading, Progress, is_interactive, loading};
 
 #[derive(Clone, Copy)]
-struct Indent(usize);
+pub struct Indent(usize);
 
 impl Indent {
     const fn new(size: usize) -> Self {
@@ -42,7 +44,7 @@ impl Display for Separator {
     }
 }
 
-const INDENT: Indent = Indent::new(4);
+pub const INDENT: Indent = Indent::new(4);
 
 #[derive(Debug, Error)]
 pub enum UiError {
