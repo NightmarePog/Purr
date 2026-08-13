@@ -1,0 +1,19 @@
+# Packages that are exempt from purr's sandbox wrapping. They are essential
+# to the manager itself and the sandbox build environment; wrapping them
+# would break the system.
+#
+# Copy this file to ~/.config/purr/exempt.txt to customize it.
+# One package name per line; '#' comments and blank lines are ignored.
+purr
+bash
+bubblewrap
+coreutils
+dash
+doas
+filesystem
+fish
+makepkg
+pacman
+sudo
+util-linux
+zsh

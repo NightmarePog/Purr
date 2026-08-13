@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub mod install;
+pub mod list;
 pub mod remove;
 pub mod run;
 
@@ -40,12 +41,18 @@ pub enum CliError {
     #[error(transparent)]
     Launcher(#[from] crate::launcher::LauncherError),
 
+    #[error(transparent)]
+    Alpm(#[from] alpm::Error),
+
+    #[error("package '{0}' is not installed")]
+    NotInstalled(String),
+
     #[error("user cancelled")]
     UserCancelled,
 }
 
 #[derive(Parser)]
-#[command(name = "aur-pkg-manager")]
+#[command(name = "purr")]
 #[command(version)]
 #[command(about = "Sandboxed AUR package manager")]
 pub struct Cli {
@@ -66,10 +73,14 @@ pub enum Command {
         #[arg(value_name = "PACKAGE")]
         package: Option<String>,
 
-        #[arg(long, value_name = "PATH", conflicts_with = "package", hide = true)]
+        #[arg(long, value_name = "PATH", hide = true)]
         entry: Option<PathBuf>,
 
-        #[arg(trailing_var_arg = true, value_name = "ARG")]
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "ARG"
+        )]
         args: Vec<String>,
     },
 
@@ -78,10 +89,37 @@ pub enum Command {
 
     #[command(name = "__wrapper-restore-all", hide = true)]
     WrapperRestoreAll,
+
     Remove {
         #[arg(value_name = "PACKAGE")]
         package: String,
     },
+
+    List {
+        #[arg(value_name = "PACKAGE")]
+        packages: Vec<String>,
+
+        #[arg(
+            long,
+            help = "List only packages managed by purr (run sandboxed)"
+        )]
+        managed: bool,
+
+        #[arg(
+            long,
+            value_name = "GLOB",
+            help = "Hide names matching a glob (repeatable)"
+        )]
+        hide: Vec<String>,
+    },
 }
 
 pub struct InstalledPackages(pub Vec<PathBuf>);
+
+pub fn dispatch_hidden(command: Command) -> Result<(), CliError> {
+    match command {
+        Command::WrapperInstall { original, stored } => run::wrapper_install(original, stored),
+        Command::WrapperRestoreAll => run::restore_all(),
+        _ => unreachable!("public command reached hidden dispatch"),
+    }
+}

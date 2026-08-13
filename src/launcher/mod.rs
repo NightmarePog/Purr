@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-pub use wrapper::{restore_all_as_root, Wrapper, WrapperError};
+pub use package::is_executable_entry;
+pub use wrapper::{Wrapper, WrapperError, restore_all_as_root};
 
 #[derive(Debug, Error)]
 pub enum LauncherError {
@@ -14,13 +15,27 @@ pub enum LauncherError {
     Package(#[from] package::PackageError),
 
     #[error(transparent)]
-    Environment(#[from] environment::EnvironmentError),
+    Environment(environment::EnvironmentError),
+
+    #[error("application exited with status {0}")]
+    Application(std::process::ExitStatus),
 
     #[error(transparent)]
     Wrapper(#[from] WrapperError),
 
     #[error("the application entry point is not an absolute standard binary path: {0}")]
     InvalidEntry(PathBuf),
+}
+
+impl From<environment::EnvironmentError> for LauncherError {
+    fn from(error: environment::EnvironmentError) -> Self {
+        match error {
+            environment::EnvironmentError::Application(status) => {
+                LauncherError::Application(status)
+            }
+            other => LauncherError::Environment(other),
+        }
+    }
 }
 
 pub fn launch(
@@ -38,7 +53,6 @@ pub fn launch(
         environment::exec_preserved(&real_entry, args)?;
     }
 
-    crate::ui::step("Launching");
     environment::launch(&entry, &real_entry, app_name(package, &entry)?, args)?;
 
     Ok(())

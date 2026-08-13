@@ -1,13 +1,17 @@
 use std::{
-    env, ffi::OsString, fs, io,
-    os::unix::process::CommandExt,
-    path::{Component, Path, PathBuf},
+    env,
+    ffi::{OsStr, OsString},
+    fs, io,
+    os::unix::{ffi::OsStrExt, process::CommandExt},
+    path::{Path, PathBuf},
     process::{Command, ExitStatus},
 };
 
 use thiserror::Error;
 
 use crate::sandbox;
+
+use super::wrapper::ORIGINALS_ROOT;
 
 #[derive(Debug, Error)]
 pub enum EnvironmentError {
@@ -26,6 +30,27 @@ pub enum EnvironmentError {
 
 const APP_DIR: &str = "/home/app";
 
+const PACMAN_STATE_PATHS: &[&str] = &["/var/lib/pacman", "/var/cache/pacman"];
+
+const USER_RUNTIME_DIR: &str = "/run/user/";
+
+const SYSTEM_BINDINGS: &[&str] = &[
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/etc/ld.so.cache",
+    "/etc/hosts",
+    "/etc/localtime",
+    "/etc/nsswitch.conf",
+    "/etc/resolv.conf",
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/ssl",
+    "/etc/ca-certificates",
+];
+
 pub fn launch(
     entry: &Path,
     real_entry: &Path,
@@ -35,24 +60,30 @@ pub fn launch(
     let root = app_data_root(app_name)?;
 
     let mut builder = sandbox::Builder::new();
-    configure(&mut builder, &root, entry, real_entry, args);
+    configure(&mut builder, &root, entry, real_entry);
+    builder.command(application_command(real_entry, args));
 
-    result_of(builder.spawn()?.wait()?)
+    let status = builder.spawn().map_err(EnvironmentError::Sandbox)?.wait()?;
+    result_of(status)
 }
 
-fn configure(
-    builder: &mut sandbox::Builder,
-    root: &Path,
-    entry: &Path,
-    real_entry: &Path,
-    args: &[String],
-) {
+fn application_command<'a>(
+    real_entry: &'a Path,
+    args: &'a [String],
+) -> impl Iterator<Item = OsString> + 'a {
+    std::iter::once(real_entry.as_os_str().to_owned()).chain(args.iter().map(Into::into))
+}
+
+fn configure(builder: &mut sandbox::Builder, root: &Path, entry: &Path, real_entry: &Path) {
     sandbox_filesystem(builder, root);
     sandbox_environment(builder);
     bind_system_files(builder);
+    bind_pacman_state(builder);
     bind_preserved_originals(builder);
-    add_wayland_access(builder);
-    builder.ro_bind(real_entry, entry).command(argv(entry, args));
+    if let Some(wayland) = Wayland::new() {
+        wayland.bind(builder);
+    }
+    builder.ro_bind(real_entry, entry);
 }
 
 fn app_data_root(app_name: &str) -> Result<PathBuf, EnvironmentError> {
@@ -61,7 +92,7 @@ fn app_data_root(app_name: &str) -> Result<PathBuf, EnvironmentError> {
             "data directory unavailable",
         )));
     };
-    let root = data_dir.join("aur-pkg-manager/apps").join(app_name);
+    let root = data_dir.join("purr/apps").join(app_name);
     fs::create_dir_all(&root).map_err(EnvironmentError::DataDirectory)?;
     Ok(root)
 }
@@ -74,9 +105,9 @@ fn sandbox_filesystem(builder: &mut sandbox::Builder, root: &Path) {
         .proc("/proc")
         .dev("/dev")
         .tmpfs("/tmp")
-        .tmpfs("/home")
-        .dir(APP_DIR)
-        .bind(root, APP_DIR);
+        .dir("/run")
+        .bind(root, APP_DIR)
+        .chdir(APP_DIR);
 }
 
 fn sandbox_environment(builder: &mut sandbox::Builder) {
@@ -88,13 +119,7 @@ fn sandbox_environment(builder: &mut sandbox::Builder) {
         .setenv("XDG_DATA_HOME", "/home/app/.local/share")
         .setenv("XDG_CACHE_HOME", "/home/app/.cache")
         .setenv("XDG_STATE_HOME", "/home/app/.local/state")
-        .setenv("AUR_MANAGER_IN_SANDBOX", "1");
-}
-
-fn argv(entry: &Path, args: &[String]) -> Vec<OsString> {
-    std::iter::once(entry.as_os_str().to_owned())
-        .chain(args.iter().map(Into::into))
-        .collect()
+        .setenv("PURR_IN_SANDBOX", "1");
 }
 
 fn result_of(status: ExitStatus) -> Result<(), EnvironmentError> {
@@ -106,75 +131,74 @@ fn result_of(status: ExitStatus) -> Result<(), EnvironmentError> {
 }
 
 pub fn exec_preserved(entry: &Path, args: &[String]) -> Result<(), EnvironmentError> {
-    Err(EnvironmentError::Exec(Command::new(entry).args(args).exec()))
+    Err(EnvironmentError::Exec(
+        Command::new(entry).args(args).exec(),
+    ))
 }
 
 pub fn in_sandbox() -> bool {
-    env::var_os("AUR_MANAGER_IN_SANDBOX").is_some()
+    env::var_os("PURR_IN_SANDBOX").is_some()
+}
+
+fn ro_bind_existing(builder: &mut sandbox::Builder, path: impl AsRef<Path>) {
+    let path = path.as_ref();
+    if path.exists() {
+        builder.ro_bind(path, path);
+    }
 }
 
 fn bind_system_files(builder: &mut sandbox::Builder) {
-    for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64"] {
-        if Path::new(path).exists() {
-            builder.ro_bind(path, path);
-        }
-    }
+    SYSTEM_BINDINGS
+        .iter()
+        .for_each(|path| ro_bind_existing(builder, path));
+}
 
-    builder.dir("/etc");
-    for path in [
-        "/etc/ld.so.cache",
-        "/etc/hosts",
-        "/etc/localtime",
-        "/etc/nsswitch.conf",
-        "/etc/resolv.conf",
-        "/etc/passwd",
-        "/etc/group",
-        "/etc/ssl",
-        "/etc/ca-certificates",
-    ] {
-        if Path::new(path).exists() {
-            builder.ro_bind(path, path);
-        }
-    }
+fn bind_pacman_state(builder: &mut sandbox::Builder) {
+    PACMAN_STATE_PATHS
+        .iter()
+        .for_each(|path| ro_bind_existing(builder, path));
 }
 
 fn bind_preserved_originals(builder: &mut sandbox::Builder) {
-    let originals = Path::new("/var/lib/aur-manager/originals");
-    if originals.exists() {
+    ro_bind_existing(builder, ORIGINALS_ROOT);
+}
+
+struct Wayland {
+    runtime: OsString,
+    display: OsString,
+    socket: PathBuf,
+}
+
+impl Wayland {
+    fn new() -> Option<Self> {
+        let runtime = env::var_os("XDG_RUNTIME_DIR")?;
+        let display = env::var_os("WAYLAND_DISPLAY")?;
+        let socket = PathBuf::from(&runtime).join(&display);
+
+        let wayland = Self {
+            runtime,
+            display,
+            socket,
+        };
+        wayland.is_socket().then_some(wayland)
+    }
+
+    fn bind(&self, builder: &mut sandbox::Builder) {
         builder
-            .dir("/var")
-            .dir("/var/lib")
-            .dir("/var/lib/aur-manager")
-            .ro_bind(originals, originals);
+            .dir(&self.runtime)
+            .ro_bind(&self.socket, &self.socket)
+            .setenv("XDG_RUNTIME_DIR", &self.runtime)
+            .setenv("WAYLAND_DISPLAY", &self.display);
+    }
+
+    fn is_socket(&self) -> bool {
+        self.socket.starts_with(USER_RUNTIME_DIR)
+            && is_filename(&self.display)
+            && self.socket.exists()
     }
 }
 
-fn add_wayland_access(builder: &mut sandbox::Builder) {
-    let Some((runtime, display, socket)) = wayland_socket() else {
-        return;
-    };
-
-    builder
-        .dir("/run")
-        .dir("/run/user")
-        .dir(&runtime)
-        .ro_bind(&socket, &socket)
-        .setenv("XDG_RUNTIME_DIR", runtime)
-        .setenv("WAYLAND_DISPLAY", display);
-}
-
-fn wayland_socket() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let runtime = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
-    let display = env::var_os("WAYLAND_DISPLAY").map(PathBuf::from)?;
-    if !runtime.starts_with("/run/user/") || !is_socket_name(&display) {
-        return None;
-    }
-
-    let socket = runtime.join(&display);
-    socket.exists().then_some((runtime, display, socket))
-}
-
-fn is_socket_name(path: &Path) -> bool {
-    let mut components = path.components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+fn is_filename(name: &OsStr) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty() && bytes != b"." && bytes != b".." && !bytes.contains(&b'/')
 }

@@ -65,7 +65,7 @@ impl Size {
     }
 }
 
-pub(super) fn format_size(size: impl Into<u128>) -> impl Display {
+pub fn format_size(size: impl Into<u128>) -> impl Display {
     let size = size.into();
 
     match size {

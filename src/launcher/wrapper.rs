@@ -10,10 +10,10 @@ use thiserror::Error;
 
 use super::package::is_executable_entry;
 
-pub const ORIGINALS_ROOT: &str = "/var/lib/aur-manager/originals";
-pub const MANAGER_PATH: &str = "/usr/bin/aur-pkg-manager";
+pub const ORIGINALS_ROOT: &str = "/var/lib/purr/originals";
+pub const MANAGER_PATH: &str = "/usr/bin/purr";
 const BOOTSTRAP_PACKAGES: &[&str] = &[
-    "aur-pkg-manager",
+    "purr",
     "bash",
     "bubblewrap",
     "coreutils",
@@ -45,7 +45,7 @@ pub enum WrapperError {
     #[error("privileged wrapper operation failed with status {0}")]
     PrivilegeFailed(std::process::ExitStatus),
 
-    #[error("wrapper target was changed outside aur-manager: {0}")]
+    #[error("wrapper target was changed outside purr: {0}")]
     Changed(PathBuf),
 
     #[error("wrapper operation failed")]
@@ -141,8 +141,6 @@ pub fn restore_all_as_root() -> Result<(), WrapperError> {
     } else {
         walk_originals(root, &mut |stored| Wrapper::from_stored(stored)?.restore())
     }
-
-
 }
 
 fn walk_originals(
@@ -267,11 +265,7 @@ fn install_script(entry: &Path, script: &str) -> Result<(), WrapperError> {
 }
 
 fn temporary_path(entry: &Path) -> PathBuf {
-    PathBuf::from(format!(
-        "{}.aur-manager-{}",
-        entry.display(),
-        std::process::id()
-    ))
+    PathBuf::from(format!("{}.purr-{}", entry.display(), std::process::id()))
 }
 
 fn restore_original(entry: &Path, stored: &Path) -> Result<(), WrapperError> {

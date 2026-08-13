@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod aur;
 mod build;
 mod cli;
@@ -37,29 +39,30 @@ fn dispatch() -> Result<(), cli::CliError> {
             package,
             entry,
             args,
-        } => {
-            ui::command(
-                "run",
-                package
-                    .as_deref()
-                    .or_else(|| entry.as_deref().and_then(|path| path.to_str()))
-                    .unwrap_or("entry point"),
-            );
-            cli::run::run(package, entry, args)
-        }
-        cli::Command::WrapperInstall { original, stored } => crate::launcher::Wrapper::new(
-            &original,
-        )
-        .and_then(|wrapper| wrapper.install_as_root(&stored))
-        .map_err(crate::launcher::LauncherError::from)
-        .map_err(cli::CliError::from),
-        cli::Command::WrapperRestoreAll => crate::launcher::restore_all_as_root()
-            .map_err(crate::launcher::LauncherError::from)
-            .map_err(cli::CliError::from),
+        } => cli::run::run(package, entry, args),
         cli::Command::Remove { package } => {
             ui::command("remove", &package);
             cli::remove::remove(package)
         }
+        cli::Command::List {
+            packages,
+            managed,
+            hide,
+        } => {
+            let target = if packages.is_empty() {
+                if managed {
+                    "managed packages"
+                } else {
+                    "all packages"
+                }
+                .to_owned()
+            } else {
+                packages.join(", ")
+            };
+            ui::command("list", &target);
+            cli::list::list(&packages, managed, &hide)
+        }
+        other => cli::dispatch_hidden(other),
     }
 }
 

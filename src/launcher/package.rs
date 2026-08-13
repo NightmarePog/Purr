@@ -49,7 +49,6 @@ pub fn installed_entry(package: &str) -> Result<PathBuf, PackageError> {
     select_executable(
         package,
         package_paths(installed.files().files())
-            .into_iter()
             .filter(|path| is_executable_entry(path) && is_executable_file(path)),
     )
 }
@@ -64,7 +63,7 @@ pub fn load_artifact(artifact: &Path) -> Result<PackageFiles, PackageError> {
 
     Ok(PackageFiles {
         name: package.name().to_owned(),
-        paths: package_paths(package.files().files()),
+        paths: package_paths(package.files().files()).collect(),
     })
 }
 
@@ -72,12 +71,11 @@ fn alpm() -> Result<Alpm, PackageError> {
     Ok(Alpm::new("/", "/var/lib/pacman")?)
 }
 
-fn package_paths(files: &[File]) -> Vec<PathBuf> {
+fn package_paths<'a>(files: &'a [File]) -> impl Iterator<Item = PathBuf> + 'a {
     files
         .iter()
         .filter_map(|file| std::str::from_utf8(file.name()).ok())
         .filter_map(package_file_path)
-        .collect()
 }
 
 impl PackageFiles {
@@ -112,7 +110,8 @@ fn select_executable(
     package: &str,
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> Result<PathBuf, PackageError> {
-    match unique(candidates).as_slice() {
+    let candidates = unique(candidates).collect::<Vec<_>>();
+    match candidates.as_slice() {
         [] => Err(PackageError::NoExecutable(package.to_owned())),
         [only] => Ok(only.clone()),
         many => match preferred(package, many) {
@@ -122,11 +121,11 @@ fn select_executable(
     }
 }
 
-fn unique(candidates: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+fn unique(candidates: impl IntoIterator<Item = PathBuf>) -> impl Iterator<Item = PathBuf> {
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     candidates.sort();
     candidates.dedup();
-    candidates
+    candidates.into_iter()
 }
 
 fn preferred(package: &str, candidates: &[PathBuf]) -> Option<PathBuf> {
@@ -149,7 +148,7 @@ fn ambiguous(package: &str, candidates: &[PathBuf]) -> PackageError {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{is_executable_entry, select_executable, validate_name, PackageError};
+    use super::{PackageError, is_executable_entry, select_executable, validate_name};
 
     #[test]
     fn prefers_the_package_named_binary() {

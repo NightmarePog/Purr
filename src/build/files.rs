@@ -5,7 +5,7 @@ use std::{
 
 use crate::build::SandboxError;
 
-const SANDBOX_NAME: &str = "aur-pkg-manager";
+const SANDBOX_NAME: &str = "purr";
 const PACMAN_DB_NAME: &str = "pacman_db";
 
 const COPIED_FILES: &[(&str, &str)] = &[
