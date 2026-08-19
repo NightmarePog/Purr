@@ -154,3 +154,54 @@ impl VersionRequirement {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_dependency_names_and_version_operators() {
+        for (raw, name, symbol, version) in [
+            ("demo=1.0", "demo", "=", "1.0"),
+            ("demo<2", "demo", "<", "2"),
+            ("demo<=2", "demo", "<=", "2"),
+            ("demo>1", "demo", ">", "1"),
+            (" demo >= 1.2 ", "demo", ">=", "1.2"),
+        ] {
+            let dependency = Dependency::new(raw, DependencyKind::Runtime);
+            let requirement = dependency.requirement.expect("version requirement");
+            assert_eq!(dependency.name, name);
+            assert_eq!(requirement.operator.symbol(), symbol);
+            assert_eq!(requirement.version, version);
+        }
+    }
+
+    #[test]
+    fn provider_keeps_the_original_requirement_target() {
+        let dependency = Dependency::new("virtual-api>=3", DependencyKind::Build);
+        let provider = dependency.for_provider("real-package");
+
+        assert_eq!(provider.name, "real-package");
+        assert_eq!(provider.spec, "real-package>=3");
+        assert_eq!(provider.requirement_name, "virtual-api");
+        assert_eq!(provider.kind, DependencyKind::Build);
+    }
+
+    #[test]
+    fn only_build_relevant_dependencies_are_resolved() {
+        for kind in [
+            DependencyKind::Runtime,
+            DependencyKind::Build,
+            DependencyKind::Check,
+        ] {
+            assert!(kind.is_resolvable());
+        }
+        for kind in [
+            DependencyKind::Optional,
+            DependencyKind::Provides,
+            DependencyKind::Conflicts,
+        ] {
+            assert!(!kind.is_resolvable());
+        }
+    }
+}

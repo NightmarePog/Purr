@@ -141,8 +141,6 @@ pub fn restore_all_as_root() -> Result<(), WrapperError> {
     } else {
         walk_originals(root, &mut |stored| Wrapper::from_stored(stored)?.restore())
     }
-
-
 }
 
 fn walk_originals(
@@ -288,5 +286,84 @@ fn shell_quote(path: &str) -> String {
         path.to_owned()
     } else {
         format!("'{}'", path.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn maps_executables_into_the_originals_tree() {
+        let stored = stored_path(Path::new("/usr/bin/demo")).unwrap();
+
+        assert_eq!(stored, Path::new(ORIGINALS_ROOT).join("usr/bin/demo"));
+        assert!(stored_path(Path::new("usr/bin/demo")).is_err());
+        assert!(stored_path(Path::new("/opt/demo")).is_err());
+    }
+
+    #[test]
+    fn quotes_shell_metacharacters_and_single_quotes() {
+        assert_eq!(shell_quote("/usr/bin/demo"), "/usr/bin/demo");
+        assert_eq!(shell_quote("/path with spaces"), "'/path with spaces'");
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn generated_script_forwards_every_argument() {
+        let wrapper = Wrapper::new(Path::new("/usr/bin/demo")).unwrap();
+        let script = wrapper.script();
+
+        assert!(script.starts_with("#!/bin/sh\n"));
+        assert!(script.contains("run --entry /usr/bin/demo -- \"$@\""));
+        assert!(validate_script(Path::new("/usr/bin/demo"), &script).is_ok());
+        assert!(validate_script(Path::new("/usr/bin/other"), &script).is_err());
+    }
+
+    #[test]
+    fn bootstrap_packages_are_never_wrapped() {
+        assert!(!should_wrap("bash", Path::new("/usr/bin/bash")));
+        assert!(should_wrap("demo", Path::new("/usr/bin/demo")));
+        assert!(!should_wrap("demo", Path::new("/usr/lib/demo")));
+    }
+
+    #[test]
+    fn installs_wrapper_atomically_with_executable_permissions() {
+        let directory = TempDir::new("wrapper-script");
+        let entry = directory.path().join("demo");
+
+        install_script(&entry, "#!/bin/sh\nexit 0\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&entry).unwrap(), "#!/bin/sh\nexit 0\n");
+        assert_eq!(
+            fs::metadata(&entry).unwrap().permissions().mode() & 0o777,
+            WRAPPER_PERMISSION_MODE
+        );
+        assert!(!temporary_path(&entry).exists());
+    }
+
+    #[test]
+    fn walks_only_regular_files_recursively() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new("walk-originals");
+        fs::create_dir(directory.path().join("nested")).unwrap();
+        fs::write(directory.path().join("root"), b"root").unwrap();
+        fs::write(directory.path().join("nested/leaf"), b"leaf").unwrap();
+        symlink(directory.path().join("root"), directory.path().join("link")).unwrap();
+        let mut visited = Vec::new();
+
+        walk_originals(directory.path(), &mut |path| {
+            visited.push(path.strip_prefix(directory.path()).unwrap().to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        visited.sort();
+
+        assert_eq!(
+            visited,
+            [PathBuf::from("nested/leaf"), PathBuf::from("root")]
+        );
     }
 }

@@ -84,4 +84,39 @@ pub enum Command {
     },
 }
 
-pub struct InstalledPackages(pub Vec<PathBuf>);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_multiple_install_targets_and_global_verbose_flag() {
+        let cli = Cli::try_parse_from(["aur-pkg-manager", "--verbose", "install", "alpha", "beta"])
+            .unwrap();
+
+        assert!(cli.verbose);
+        match cli.command {
+            Command::Install { packages } => assert_eq!(packages, ["alpha", "beta"]),
+            _ => panic!("expected install command"),
+        }
+    }
+
+    #[test]
+    fn rejects_run_package_combined_with_hidden_entry() {
+        let result =
+            Cli::try_parse_from(["aur-pkg-manager", "run", "demo", "--entry", "/usr/bin/demo"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn preserves_hyphenated_application_arguments() {
+        let cli =
+            Cli::try_parse_from(["aur-pkg-manager", "run", "demo", "--", "--application-flag"])
+                .unwrap();
+
+        match cli.command {
+            Command::Run { args, .. } => assert_eq!(args, ["--application-flag"]),
+            _ => panic!("expected run command"),
+        }
+    }
+}

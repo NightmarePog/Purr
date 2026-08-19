@@ -84,3 +84,24 @@ pub(super) fn format_size(size: impl Into<u128>) -> impl Display {
         size => Size::Bytes(size),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_bytes_and_binary_units() {
+        assert_eq!(format_size(0_u64).to_string(), "0 B");
+        assert_eq!(format_size(1023_u64).to_string(), "1023 B");
+        assert_eq!(format_size(1024_u64).to_string(), "1.0 KiB");
+        assert_eq!(format_size(1536_u64).to_string(), "1.5 KiB");
+        assert_eq!(format_size(1024_u64 * 1024).to_string(), "1.0 MiB");
+        assert_eq!(format_size(1024_u64 * 1024 * 1024).to_string(), "1.0 GiB");
+    }
+
+    #[test]
+    fn rounds_to_one_decimal_place() {
+        assert_eq!(format_size(1280_u64).to_string(), "1.3 KiB");
+        assert_eq!(format_size(1228_u64).to_string(), "1.2 KiB");
+    }
+}

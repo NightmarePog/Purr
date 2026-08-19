@@ -9,6 +9,9 @@ pub enum SpawnError {
     #[error("failed to spawn bubblewrap")]
     Io(#[from] std::io::Error),
 
+    #[error("bubblewrap {0} was not captured")]
+    MissingPipe(&'static str),
+
     #[error(transparent)]
     Ui(#[from] crate::ui::UiError),
 }
@@ -111,7 +114,7 @@ impl Builder {
     }
 
     pub fn makepkg(&mut self) -> &mut Self {
-        self.command(["/usr/bin/makepkg", "-f", "--noconfirm", "--skippgpcheck"])
+        self.command(["/usr/bin/makepkg", "-f", "--noconfirm"])
     }
 
     pub fn spawn(self) -> Result<runner::Runner, SpawnError> {
@@ -120,5 +123,74 @@ impl Builder {
 
     pub fn spawn_quiet(self) -> Result<runner::Runner, SpawnError> {
         runner::Runner::spawn_quiet(self.args)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arguments(&self) -> &[OsString] {
+        &self.args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn makepkg_keeps_source_signature_verification_enabled() {
+        let mut builder = Builder::new();
+        builder.makepkg();
+
+        assert!(
+            builder
+                .args
+                .iter()
+                .any(|argument| argument == "--noconfirm")
+        );
+        assert!(
+            !builder
+                .args
+                .iter()
+                .any(|argument| argument == "--skippgpcheck")
+        );
+    }
+
+    #[test]
+    fn command_terminates_bubblewrap_options() {
+        let mut builder = Builder::new();
+        builder.command(["/usr/bin/demo", "--flag"]);
+
+        assert_eq!(
+            builder.args,
+            ["--", "/usr/bin/demo", "--flag"]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bind_and_environment_arguments_preserve_order() {
+        let mut builder = Builder::new();
+        builder
+            .ro_bind("/host", "/sandbox")
+            .setenv("KEY", "value")
+            .chdir("/sandbox");
+
+        assert_eq!(
+            builder.args,
+            [
+                "--ro-bind",
+                "/host",
+                "/sandbox",
+                "--setenv",
+                "KEY",
+                "value",
+                "--chdir",
+                "/sandbox",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
     }
 }

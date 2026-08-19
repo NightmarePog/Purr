@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{config, sandbox};
+use crate::sandbox;
 
 use crate::build::{SandboxError, SandboxFiles};
 
@@ -41,9 +41,8 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new(files: SandboxFiles) -> Result<Self, SandboxError> {
-        fs::create_dir_all(config::BUILD_PATH)?;
-        let build_path = fs::canonicalize(config::BUILD_PATH)?;
+    pub fn new(files: SandboxFiles, build_root: &Path) -> Result<Self, SandboxError> {
+        let build_path = fs::canonicalize(build_root)?;
 
         let mut builder = sandbox::Builder::new();
 
@@ -106,5 +105,41 @@ impl Environment {
 
     pub fn pacman_db(&self) -> &Path {
         &self.pacman_db
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn configures_isolated_build_mounts_and_environment() {
+        let directory = TempDir::new("build-environment");
+        let build_root = directory.path().join("build");
+        let files_root = directory.path().join("files");
+        fs::create_dir(&build_root).unwrap();
+        fs::create_dir(&files_root).unwrap();
+        let environment = Environment::new(SandboxFiles::for_test(files_root), &build_root)
+            .expect("build environment");
+        let arguments = environment.builder.arguments();
+
+        for required in [
+            "--unshare-all",
+            "--share-net",
+            "--die-with-parent",
+            "--clearenv",
+            "HOME",
+            "/build",
+            "MAKEFLAGS",
+            "-j4",
+            CONTAINER_PKG_DIR,
+            CONTAINER_PACMAN_DB,
+        ] {
+            assert!(
+                arguments.iter().any(|argument| argument == required),
+                "{required}"
+            );
+        }
     }
 }

@@ -147,3 +147,63 @@ pub fn fetch_package_info(package: &str) -> Result<RpcPackage, RpcError> {
         .next()
         .ok_or_else(|| RpcError::NotFound(package.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package() -> RpcPackage {
+        RpcPackage {
+            name: "demo".to_owned(),
+            version: "1.0-1".to_owned(),
+            maintainer: Some("maintainer".to_owned()),
+            submitter: None,
+            package_base: "demo-base".to_owned(),
+            description: None,
+            url: None,
+            votes: 0,
+            popularity: 0.0,
+            out_of_date: None,
+            last_modified: 0,
+            depends: vec!["runtime".to_owned()],
+            make_depends: vec!["builder".to_owned()],
+            check_depends: vec!["checker".to_owned()],
+            opt_depends: vec!["optional: description".to_owned()],
+            provides: vec!["virtual-demo=1".to_owned()],
+            conflicts: vec!["old-demo".to_owned()],
+        }
+    }
+
+    #[test]
+    fn maps_all_dependency_categories() {
+        let dependencies: Vec<Dependency> = package().dependencies();
+
+        for (name, kind) in [
+            ("runtime", DependencyKind::Runtime),
+            ("builder", DependencyKind::Build),
+            ("checker", DependencyKind::Check),
+            ("optional: description", DependencyKind::Optional),
+            ("virtual-demo", DependencyKind::Provides),
+            ("old-demo", DependencyKind::Conflicts),
+        ] {
+            assert!(
+                dependencies
+                    .iter()
+                    .any(|dependency| dependency.name == name && dependency.kind == kind),
+                "missing {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identifies_orphaned_and_outdated_packages() {
+        let mut package = package();
+        assert!(!package.orphan());
+        assert!(!package.is_outdated());
+
+        package.maintainer = None;
+        package.out_of_date = Some(1);
+        assert!(package.orphan());
+        assert!(package.is_outdated());
+    }
+}

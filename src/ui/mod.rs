@@ -55,3 +55,15 @@ pub enum UiError {
     #[error("stdin closed")]
     StdinClosed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_fixed_width_indent_and_separator() {
+        assert_eq!(Indent::new(4).to_string(), "    ");
+        assert_eq!(Separator(3).to_string(), "───");
+        assert_eq!(INDENT.size(), 4);
+    }
+}

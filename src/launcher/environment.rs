@@ -1,5 +1,7 @@
 use std::{
-    env, ffi::OsString, fs, io,
+    env,
+    ffi::OsString,
+    fs, io,
     os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus},
@@ -52,7 +54,9 @@ fn configure(
     bind_system_files(builder);
     bind_preserved_originals(builder);
     add_wayland_access(builder);
-    builder.ro_bind(real_entry, entry).command(argv(entry, args));
+    builder
+        .ro_bind(real_entry, entry)
+        .command(argv(entry, args));
 }
 
 fn app_data_root(app_name: &str) -> Result<PathBuf, EnvironmentError> {
@@ -106,7 +110,9 @@ fn result_of(status: ExitStatus) -> Result<(), EnvironmentError> {
 }
 
 pub fn exec_preserved(entry: &Path, args: &[String]) -> Result<(), EnvironmentError> {
-    Err(EnvironmentError::Exec(Command::new(entry).args(args).exec()))
+    Err(EnvironmentError::Exec(
+        Command::new(entry).args(args).exec(),
+    ))
 }
 
 pub fn in_sandbox() -> bool {
@@ -177,4 +183,43 @@ fn wayland_socket() -> Option<(PathBuf, PathBuf, PathBuf)> {
 fn is_socket_name(path: &Path) -> bool {
     let mut components = path.components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn argv_keeps_entry_first_and_preserves_arguments() {
+        let arguments = argv(
+            Path::new("/usr/bin/demo"),
+            &["--flag".to_owned(), "value with spaces".to_owned()],
+        );
+
+        assert_eq!(
+            arguments,
+            ["/usr/bin/demo", "--flag", "value with spaces"]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn wayland_display_must_be_one_normal_path_component() {
+        assert!(is_socket_name(Path::new("wayland-0")));
+        assert!(!is_socket_name(Path::new("../wayland-0")));
+        assert!(!is_socket_name(Path::new("nested/wayland-0")));
+        assert!(!is_socket_name(Path::new("/run/wayland-0")));
+    }
+
+    #[test]
+    fn application_exit_status_is_propagated() {
+        assert!(result_of(ExitStatus::from_raw(0)).is_ok());
+        assert!(matches!(
+            result_of(ExitStatus::from_raw(7 << 8)),
+            Err(EnvironmentError::Application(_))
+        ));
+    }
 }

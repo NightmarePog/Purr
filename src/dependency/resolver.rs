@@ -58,11 +58,11 @@ impl Resolver {
     ) -> Result<String, ResolveError> {
         let name = package.name.as_str();
 
-        if package.requirement.is_none() {
-            if let Ok(provider) = self.cached_provider(name) {
-                loading.set_message(format!("Using cached package: {}", package.spec));
-                return Ok(provider);
-            }
+        if package.requirement.is_none()
+            && let Ok(provider) = self.cached_provider(name)
+        {
+            loading.set_message(format!("Using cached package: {}", package.spec));
+            return Ok(provider);
         }
 
         loading.set_message(format!("Checking installed package: {}", package.spec));
@@ -180,7 +180,9 @@ impl Resolver {
             ui::warn(format_args!("{} has no maintainer", package.name));
         }
 
-        if let Some(flagged) = package.out_of_date {
+        if package.is_outdated()
+            && let Some(flagged) = package.out_of_date
+        {
             ui::warn(format_args!(
                 "{} was flagged out of date {}",
                 package.name,
@@ -266,4 +268,90 @@ fn package_satisfies(package: &PackageNode, dependency: &Dependency) -> Result<b
     }
 
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dependency::{DependencyKind, PackageSource};
+
+    fn package(name: &str, version: Option<&str>, provides: &[&str]) -> PackageNode {
+        PackageNode {
+            name: name.to_owned(),
+            version: version.map(str::to_owned),
+            source: PackageSource::Repo,
+            dependencies: Vec::new(),
+            size: None,
+            download_size: None,
+            provides: provides
+                .iter()
+                .map(|provide| (*provide).to_owned())
+                .collect(),
+            packager: None,
+            aur: None,
+        }
+    }
+
+    #[test]
+    fn accepts_unversioned_and_matching_versioned_packages() {
+        let candidate = package("demo", Some("2.1-1"), &[]);
+
+        assert!(
+            package_satisfies(
+                &candidate,
+                &Dependency::new("demo", DependencyKind::Runtime)
+            )
+            .expect("unversioned comparison")
+        );
+        assert!(
+            package_satisfies(
+                &candidate,
+                &Dependency::new("demo>=2", DependencyKind::Runtime)
+            )
+            .expect("version comparison")
+        );
+        assert!(
+            !package_satisfies(
+                &candidate,
+                &Dependency::new("demo>3", DependencyKind::Runtime)
+            )
+            .expect("version comparison")
+        );
+    }
+
+    #[test]
+    fn checks_versioned_virtual_provides() {
+        let candidate = package("provider", Some("9"), &["virtual-api=3"]);
+
+        assert!(
+            package_satisfies(
+                &candidate,
+                &Dependency::new("virtual-api>=2", DependencyKind::Build)
+            )
+            .expect("provided version comparison")
+        );
+        assert!(
+            !package_satisfies(
+                &candidate,
+                &Dependency::new("virtual-api>3", DependencyKind::Build)
+            )
+            .expect("provided version comparison")
+        );
+    }
+
+    #[test]
+    fn cached_provider_round_trips_requested_name() {
+        let mut resolver = Resolver {
+            graph: DependencyGraph::default(),
+            installed: HashMap::new(),
+            providers: HashMap::new(),
+        };
+        resolver.remember_provider("virtual", "real");
+
+        assert_eq!(resolver.cached_provider("virtual").unwrap(), "real");
+        assert!(matches!(
+            resolver.cached_provider("missing"),
+            Err(ResolveError::NotFound(_))
+        ));
+    }
 }

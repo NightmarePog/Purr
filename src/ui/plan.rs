@@ -139,7 +139,7 @@ fn print_aur_metadata(aur: &AurMeta) {
         "votes",
         format_args!("{} (popularity {:.2})", aur.votes, aur.popularity),
     );
-    detail("updated", &relative_time(aur.last_modified));
+    detail("updated", relative_time(aur.last_modified));
 }
 
 fn print_optional_aur_metadata(aur: &AurMeta) {
@@ -168,6 +168,10 @@ pub fn relative_time(timestamp: i64) -> String {
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or_default();
 
+    relative_time_at(timestamp, now)
+}
+
+fn relative_time_at(timestamp: i64, now: i64) -> String {
     let seconds = now - timestamp;
 
     if seconds < 0 {
@@ -181,15 +185,60 @@ pub fn relative_time(timestamp: i64) -> String {
     const YEAR: i64 = DAY * 365;
 
     let (value, unit) = match seconds {
-        ..MINUTE => return "just now".into(),
-        ..HOUR => (seconds / MINUTE, "minute"),
-        ..DAY => (seconds / HOUR, "hour"),
-        ..MONTH => (seconds / DAY, "day"),
-        ..YEAR => (seconds / MONTH, "month"),
+        0..MINUTE => return "just now".into(),
+        MINUTE..HOUR => (seconds / MINUTE, "minute"),
+        HOUR..DAY => (seconds / HOUR, "hour"),
+        DAY..MONTH => (seconds / DAY, "day"),
+        MONTH..YEAR => (seconds / MONTH, "month"),
         _ => (seconds / YEAR, "year"),
     };
 
     let plural = if value == 1 { "" } else { "s" };
 
     format!("{value} {unit}{plural} ago")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package(name: &str, source: PackageSource) -> PackageNode {
+        PackageNode {
+            name: name.to_owned(),
+            version: Some("1.0".to_owned()),
+            source,
+            dependencies: Vec::new(),
+            size: Some(1024),
+            download_size: None,
+            provides: Vec::new(),
+            packager: Some("packager".to_owned()),
+            aur: None,
+        }
+    }
+
+    #[test]
+    fn formats_relative_time_boundaries_and_pluralization() {
+        let now = 10 * 365 * 24 * 60 * 60;
+        assert_eq!(relative_time_at(now + 1, now), "just now");
+        assert_eq!(relative_time_at(now - 59, now), "just now");
+        assert_eq!(relative_time_at(now - 60, now), "1 minute ago");
+        assert_eq!(relative_time_at(now - 120, now), "2 minutes ago");
+        assert_eq!(relative_time_at(now - 3600, now), "1 hour ago");
+        assert_eq!(relative_time_at(now - 86_400, now), "1 day ago");
+    }
+
+    #[test]
+    fn package_table_contains_plan_values() {
+        let plan = InstallPlan {
+            packages: vec![
+                package("repo-demo", PackageSource::Repo),
+                package("aur-demo", PackageSource::Aur),
+            ],
+        };
+
+        let rendered = package_table(&plan).to_string();
+        assert!(rendered.contains("repo-demo"));
+        assert!(rendered.contains("aur-demo"));
+        assert!(rendered.contains("1.0 KiB"));
+    }
 }

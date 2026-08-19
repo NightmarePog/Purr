@@ -66,11 +66,22 @@ pub fn installed_packages() -> Result<HashMap<String, String>, PacmanError> {
     if !output.status.success() {
         Err(PacmanError::Query)
     } else {
-        Ok(String::from_utf8(output.stdout)?
-            .lines()
-            .filter_map(|l| l.split_once(' '))
-            .map(|(n, v)| (n.into(), v.trim().into()))
-            .collect())
+        Ok(parse_installed_packages(&String::from_utf8(output.stdout)?))
+    }
+}
+
+fn parse_installed_packages(text: &str) -> HashMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(name, version)| (name.into(), version.trim().into()))
+        .collect()
+}
+
+fn parse_package_list(value: &str) -> Vec<String> {
+    if value == "None" {
+        Vec::new()
+    } else {
+        value.split_whitespace().map(str::to_owned).collect()
     }
 }
 
@@ -137,6 +148,7 @@ impl PackageNode {
 
     pub fn from_installed(name: &str) -> Result<Self, PacmanError> {
         let output = Command::new("pacman")
+            .env("LC_ALL", "C")
             .args(["-Qi", name])
             .output()
             .map_err(PacmanError::spawn)?;
@@ -182,7 +194,7 @@ impl PackageNode {
                         ..r
                     },
                     "Provides" => Self {
-                        provides: value.split_whitespace().map(str::to_owned).collect(),
+                        provides: parse_package_list(value),
                         ..r
                     },
                     "Packager" => Self {
@@ -208,5 +220,50 @@ impl AurMeta {
             out_of_date: info.out_of_date,
             last_modified: info.last_modified,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pacman_sizes() {
+        assert_eq!(parse_size("1.5 KiB"), Some(1536));
+        assert_eq!(parse_size("2 MiB"), Some(2 * 1024 * 1024));
+        assert_eq!(parse_size("1 GiB"), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_size("unknown"), None);
+    }
+
+    #[test]
+    fn parses_installed_package_listing_and_skips_noise() {
+        let packages = parse_installed_packages("alpha 1.0-1\ninvalid\nbeta 2.0-3\n");
+
+        assert_eq!(packages.get("alpha").map(String::as_str), Some("1.0-1"));
+        assert_eq!(packages.get("beta").map(String::as_str), Some("2.0-3"));
+        assert_eq!(packages.len(), 2);
+    }
+
+    #[test]
+    fn parses_pacman_metadata_and_none_provides() {
+        let package = PackageNode::parse_pacman(
+            "demo",
+            "Version : 1.2-1\nInstalled Size : 1.5 KiB\nDownload Size : 2 MiB\nProvides : None\nPackager : Example\n",
+            PackageSource::Repo,
+        );
+
+        assert_eq!(package.name, "demo");
+        assert_eq!(package.version.as_deref(), Some("1.2-1"));
+        assert_eq!(package.size, Some(1536));
+        assert_eq!(package.download_size, Some(2 * 1024 * 1024));
+        assert!(package.provides.is_empty());
+        assert_eq!(package.packager.as_deref(), Some("Example"));
+        assert_eq!(package.source, PackageSource::Repo);
+    }
+
+    #[test]
+    fn classifies_missing_pacman_executable() {
+        let error = PacmanError::spawn(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(matches!(error, PacmanError::Missing));
     }
 }

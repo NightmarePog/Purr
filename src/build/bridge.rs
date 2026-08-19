@@ -20,21 +20,29 @@ impl<'a> Database<'a> {
     }
 
     pub fn push(&self, artifact: Artifact<'_>) -> Result<(), BuildError> {
-        artifact.load(self, |package| self.register(package))
+        artifact.load(self, |database, package| self.register(database, package))
     }
 
-    fn register(&self, package: &LoadedPackage<'_>) -> Result<(), BuildError> {
-        let package_directory = self.package_directory(&package);
+    fn register(&self, database: &Alpm, package: &LoadedPackage<'_>) -> Result<(), BuildError> {
+        if let Ok(installed) = database.localdb().pkg(package.name()) {
+            let installed_directory =
+                self.package_directory(installed.name(), installed.version().as_ref());
+            match fs::remove_dir_all(installed_directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        let package_directory = self.package_directory(package.name(), package.version().as_ref());
 
         fs::create_dir_all(&package_directory)?;
         PackageDescription::from(package).write_description_file(&package_directory)?;
         self.write_package_file_list(&package_directory, package)
     }
 
-    fn package_directory(&self, package: &LoadedPackage<'_>) -> PathBuf {
-        self.0
-            .join("local")
-            .join(format!("{}-{}", package.name(), package.version()))
+    fn package_directory(&self, name: &str, version: &str) -> PathBuf {
+        self.0.join("local").join(format!("{name}-{version}"))
     }
 
     fn write_package_file_list(
@@ -68,25 +76,28 @@ impl Artifact<'_> {
     fn load<T>(
         &self,
         database: &Database<'_>,
-        process: impl for<'b> FnOnce(&LoadedPackage<'b>) -> Result<T, BuildError>,
+        process: impl for<'b> FnOnce(&Alpm, &LoadedPackage<'b>) -> Result<T, BuildError>,
     ) -> Result<T, BuildError> {
         let alpm = Alpm::new("/".to_owned(), database.0.to_string_lossy().into_owned())?;
         let package = alpm.pkg_load(self.0.to_string_lossy().into_owned(), true, SigLevel::NONE)?;
-        process(&package)
+        process(&alpm, &package)
     }
 }
 
 fn is_package_file_entry(file_name: &str) -> bool {
-    !file_name.ends_with('/')
-        && (!file_name.starts_with('.') || file_name.starts_with("./"))
-        && !matches!(file_name, ".BUILDINFO" | ".MTREE" | ".PKGINFO" | ".INSTALL")
+    let normalized = file_name.strip_prefix("./").unwrap_or(file_name);
+    !normalized.ends_with('/')
+        && !matches!(
+            normalized,
+            ".BUILDINFO" | ".MTREE" | ".PKGINFO" | ".INSTALL"
+        )
 }
 
 struct PackageDescription {
     content: String,
 }
 
-const ALLOWED_FIELD_NAMES: [&'static str; 16] = [
+const ALLOWED_FIELD_NAMES: [&str; 16] = [
     "NAME",
     "VERSION",
     "BASE",
@@ -188,5 +199,42 @@ impl<'a> From<&LoadedPackage<'a>> for PackageDescription {
             ..optdepends(),
             ..provides(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_payload_files_and_rejects_package_metadata() {
+        for path in ["usr/bin/demo", "./usr/lib/libdemo.so", ".config"] {
+            assert!(is_package_file_entry(path), "{path}");
+        }
+        for path in [
+            "usr/share/demo/",
+            ".BUILDINFO",
+            "./.BUILDINFO",
+            ".MTREE",
+            "./.MTREE",
+            ".PKGINFO",
+            "./.PKGINFO",
+            ".INSTALL",
+            "./.INSTALL",
+        ] {
+            assert!(!is_package_file_entry(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn writes_pacman_fields_with_blank_separators() {
+        let mut description = PackageDescription::new();
+        description.write_field("NAME", ["demo"]);
+        description.write_field("DEPENDS", ["libc", "bash"]);
+
+        assert_eq!(
+            description.content,
+            "%NAME%\ndemo\n\n%DEPENDS%\nlibc\nbash\n\n"
+        );
     }
 }

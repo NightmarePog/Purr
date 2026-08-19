@@ -3,7 +3,8 @@ use std::{
     ffi::OsString,
     io::{BufRead, BufReader, Read},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc::{self, RecvTimeoutError, Sender},
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -39,65 +40,97 @@ impl Runner {
     }
 
     pub fn wait_with_progress(mut self, label: &str) -> Result<(ExitStatus, String), SpawnError> {
-        let stdout = self.0.stdout.take().unwrap();
-        let stderr = self.0.stderr.take().unwrap();
-        let (stderr_tx, stderr_rx) = mpsc::channel();
-        let stdout_reader = spawn_line_reader(stdout, stderr_tx.clone());
-        let stderr_reader = spawn_line_reader(stderr, stderr_tx);
-        let mut full_output = String::new();
-        let mut current_status = String::new();
-        let mut activity = VecDeque::new();
+        let (lines, readers) = capture_output(&mut self.0)?;
         let mut progress = ui::Progress::new()?;
+        let output = track_progress(&lines, &mut progress, label, ui::is_interactive());
 
-        progress.update(label, &current_status, &activity);
-
-        loop {
-            match stderr_rx.recv_timeout(Duration::from_millis(120)) {
-                Ok(line) => {
-                    full_output.push_str(&line);
-                    full_output.push('\n');
-
-                    let is_stage = if let Some(status) = parse_makepkg_stage(&line) {
-                        current_status = status.to_string();
-                        if !is_progress_stage(status) {
-                            append_activity(&mut activity, status);
-                        }
-                        true
-                    } else if ui::is_interactive() {
-                        if let Some(detail) = summarize_build_line(&line) {
-                            append_activity(&mut activity, &detail);
-                        }
-                        false
-                    } else {
-                        false
-                    };
-
-                    if ui::is_interactive() || is_stage {
-                        progress.update(label, &current_status, &activity);
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) if ui::is_interactive() => {
-                    progress.update(label, &current_status, &activity);
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-        }
-
-        stdout_reader.join().ok();
-        stderr_reader.join().ok();
+        readers.into_iter().for_each(|reader| {
+            reader.join().ok();
+        });
         let status = self.0.wait()?;
-
         progress.finish();
 
-        let diagnostics = if status.success() {
-            String::new()
-        } else {
-            full_output
-        };
-
-        Ok((status, diagnostics))
+        Ok((status, diagnostics(status.success(), output)))
     }
+}
+
+#[derive(Default)]
+struct ProgressState {
+    status: String,
+    activity: VecDeque<String>,
+}
+
+impl ProgressState {
+    fn record(&mut self, line: &str, include_details: bool) -> bool {
+        if let Some(status) = parse_makepkg_stage(line) {
+            self.status = status.to_owned();
+            if !is_progress_stage(status) {
+                append_activity(&mut self.activity, status);
+            }
+            true
+        } else {
+            if include_details && let Some(detail) = summarize_build_line(line) {
+                append_activity(&mut self.activity, &detail);
+            }
+            false
+        }
+    }
+}
+
+fn capture_output(
+    child: &mut Child,
+) -> Result<(Receiver<String>, [JoinHandle<()>; 2]), SpawnError> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(SpawnError::MissingPipe("stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or(SpawnError::MissingPipe("stderr"))?;
+    let (sender, lines) = mpsc::channel();
+    let readers = [
+        spawn_line_reader(stdout, sender.clone()),
+        spawn_line_reader(stderr, sender),
+    ];
+
+    Ok((lines, readers))
+}
+
+fn track_progress(
+    lines: &Receiver<String>,
+    progress: &mut ui::Progress,
+    label: &str,
+    interactive: bool,
+) -> String {
+    let mut output = String::new();
+    let mut state = ProgressState::default();
+    progress.update(label, &state.status, &state.activity);
+
+    loop {
+        match lines.recv_timeout(Duration::from_millis(120)) {
+            Ok(line) => {
+                output.push_str(&line);
+                output.push('\n');
+
+                let stage_changed = state.record(&line, interactive);
+                if interactive || stage_changed {
+                    progress.update(label, &state.status, &state.activity);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) if interactive => {
+                progress.update(label, &state.status, &state.activity);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    output
+}
+
+fn diagnostics(success: bool, output: String) -> String {
+    if success { String::new() } else { output }
 }
 
 fn append_activity(activity: &mut VecDeque<String>, line: &str) {
@@ -163,10 +196,10 @@ fn summarize_build_line(line: &str) -> Option<String> {
 }
 
 fn parse_makepkg_stage(line: &str) -> Option<&str> {
-    if let Some(rest) = line.strip_prefix("==> Retrieving sources...") {
-        if !rest.is_empty() {
-            return Some(rest.trim_start());
-        }
+    if let Some(rest) = line.strip_prefix("==> Retrieving sources...")
+        && !rest.is_empty()
+    {
+        return Some(rest.trim_start());
     }
     if line.starts_with("  -> Downloading ") {
         let file = line.strip_prefix("  -> Downloading ").unwrap_or(line);
@@ -234,7 +267,9 @@ fn parse_makepkg_stage(line: &str) -> Option<&str> {
 mod tests {
     use std::collections::VecDeque;
 
-    use crate::sandbox::runner::{append_activity, parse_makepkg_stage, summarize_build_line};
+    use crate::sandbox::runner::{
+        ProgressState, append_activity, diagnostics, parse_makepkg_stage, summarize_build_line,
+    };
 
     #[test]
     fn keeps_a_rolling_log_of_recent_build_actions() {
@@ -283,5 +318,24 @@ mod tests {
             Some("cc -O2 src/main.c".into())
         );
         assert_eq!(summarize_build_line("==> Starting build()..."), None);
+    }
+
+    #[test]
+    fn tracks_stages_and_optional_build_details() {
+        let mut state = ProgressState::default();
+
+        assert!(state.record("==> Starting build()...", false));
+        assert_eq!(state.status, "building");
+        assert!(!state.record("cc -O2 src/main.c", false));
+        assert!(state.activity.is_empty());
+
+        state.record("cc -O2 src/main.c", true);
+        assert_eq!(state.activity, ["cc -O2 src/main.c"]);
+    }
+
+    #[test]
+    fn returns_output_only_for_failed_processes() {
+        assert_eq!(diagnostics(true, "build output".into()), "");
+        assert_eq!(diagnostics(false, "build output".into()), "build output");
     }
 }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-pub use wrapper::{restore_all_as_root, Wrapper, WrapperError};
+pub use wrapper::{Wrapper, WrapperError, restore_all_as_root};
 
 #[derive(Debug, Error)]
 pub enum LauncherError {
@@ -87,5 +87,47 @@ fn resolve_real_entry(entry: &Path) -> Result<PathBuf, LauncherError> {
         Ok(entry.to_path_buf())
     } else {
         Err(LauncherError::InvalidEntry(entry.to_path_buf()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_application_name_from_package_or_entry() {
+        assert_eq!(
+            app_name(Some("demo"), Path::new("/usr/bin/other")).unwrap(),
+            "demo"
+        );
+        assert_eq!(app_name(None, Path::new("/usr/bin/demo")).unwrap(), "demo");
+    }
+
+    #[test]
+    fn rejects_an_entry_without_an_application_name() {
+        assert!(matches!(
+            app_name(None, Path::new("/")),
+            Err(LauncherError::InvalidEntry(path)) if path == Path::new("/")
+        ));
+    }
+
+    #[test]
+    fn accepts_only_absolute_standard_binary_entries() {
+        assert_eq!(
+            resolve_entry(None, Some(Path::new("/usr/bin/demo"))).unwrap(),
+            Path::new("/usr/bin/demo")
+        );
+        assert!(matches!(
+            resolve_entry(None, Some(Path::new("usr/bin/demo"))),
+            Err(LauncherError::InvalidEntry(_))
+        ));
+        assert!(matches!(
+            resolve_entry(None, Some(Path::new("/opt/demo"))),
+            Err(LauncherError::InvalidEntry(_))
+        ));
+        assert!(matches!(
+            resolve_entry(None, None),
+            Err(LauncherError::InvalidEntry(path)) if path.as_os_str().is_empty()
+        ));
     }
 }

@@ -84,7 +84,11 @@ impl Progress {
 }
 
 fn phase(status: &str) -> &str {
-    status.is_empty().then_some("starting").unwrap_or(status)
+    if status.is_empty() {
+        "starting"
+    } else {
+        status
+    }
 }
 
 pub fn is_interactive() -> bool {
@@ -115,5 +119,44 @@ fn stage_completion(status: &str) -> u8 {
         "generating metadata" => 97,
         "done" => 100,
         _ => 10,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_build_stages_to_monotonic_progress() {
+        let stages = [
+            "",
+            "validating",
+            "extracting",
+            "resolving version",
+            "preparing",
+            "building",
+            "testing",
+            "packaging",
+            "tidying",
+            "compressing",
+            "generating metadata",
+            "done",
+        ];
+        let completion = stages.map(stage_completion);
+
+        assert!(completion.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(stage_completion("unknown activity"), 10);
+    }
+
+    #[test]
+    fn empty_status_has_a_user_facing_phase() {
+        assert_eq!(phase(""), "starting");
+        assert_eq!(phase("building"), "building");
+    }
+
+    #[test]
+    fn progress_templates_are_valid() {
+        assert!(spinner_style().is_ok());
+        assert!(progress_style().is_ok());
     }
 }

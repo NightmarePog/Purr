@@ -22,6 +22,9 @@ pub enum SandboxError {
     #[error("failed to locate user data directory")]
     MissingDataDir,
 
+    #[error("failed to locate user cache directory")]
+    MissingCacheDir,
+
     #[error(transparent)]
     Spawn(#[from] sandbox::SpawnError),
 }
@@ -42,6 +45,9 @@ pub enum BuildError {
 
     #[error("pacman failed to install built packages")]
     InstallFailed,
+
+    #[error("pacman failed to install repository packages")]
+    RepoInstallFailed,
 
     #[error("invalid build directory: {0}")]
     InvalidPath(PathBuf),

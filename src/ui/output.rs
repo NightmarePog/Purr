@@ -51,5 +51,20 @@ pub fn prompt_marker() {
 }
 
 fn rule() -> Separator {
-    Separator((Term::stdout().size().1 as usize).saturating_sub(INDENT.size()))
+    rule_for_width(Term::stdout().size().1 as usize)
+}
+
+fn rule_for_width(width: usize) -> Separator {
+    Separator(width.saturating_sub(INDENT.size()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_rule_accounts_for_indent_and_tiny_terminals() {
+        assert_eq!(rule_for_width(10).to_string(), "──────");
+        assert_eq!(rule_for_width(2).to_string(), "");
+    }
 }

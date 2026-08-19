@@ -5,6 +5,8 @@ mod config;
 mod dependency;
 mod launcher;
 mod sandbox;
+#[cfg(test)]
+mod test_support;
 mod ui;
 
 use std::{error::Error, process::ExitCode};
@@ -47,12 +49,12 @@ fn dispatch() -> Result<(), cli::CliError> {
             );
             cli::run::run(package, entry, args)
         }
-        cli::Command::WrapperInstall { original, stored } => crate::launcher::Wrapper::new(
-            &original,
-        )
-        .and_then(|wrapper| wrapper.install_as_root(&stored))
-        .map_err(crate::launcher::LauncherError::from)
-        .map_err(cli::CliError::from),
+        cli::Command::WrapperInstall { original, stored } => {
+            crate::launcher::Wrapper::new(&original)
+                .and_then(|wrapper| wrapper.install_as_root(&stored))
+                .map_err(crate::launcher::LauncherError::from)
+                .map_err(cli::CliError::from)
+        }
         cli::Command::WrapperRestoreAll => crate::launcher::restore_all_as_root()
             .map_err(crate::launcher::LauncherError::from)
             .map_err(cli::CliError::from),

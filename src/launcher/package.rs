@@ -147,9 +147,12 @@ fn ambiguous(package: &str, candidates: &[PathBuf]) -> PackageError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
-    use super::{is_executable_entry, select_executable, validate_name, PackageError};
+    use super::{
+        PackageError, is_executable_entry, is_executable_file, package_file_path,
+        select_executable, unique, validate_name,
+    };
 
     #[test]
     fn prefers_the_package_named_binary() {
@@ -194,5 +197,42 @@ mod tests {
         assert!(!is_executable_entry(
             PathBuf::from("/usr/lib/demo/helper").as_path()
         ));
+    }
+
+    #[test]
+    fn normalizes_package_archive_paths() {
+        assert_eq!(
+            package_file_path("./usr/bin/demo"),
+            Some(PathBuf::from("/usr/bin/demo"))
+        );
+        assert_eq!(package_file_path("usr/bin/"), None);
+        assert_eq!(package_file_path(""), None);
+    }
+
+    #[test]
+    fn removes_duplicate_candidate_paths() {
+        assert_eq!(
+            unique([
+                PathBuf::from("/usr/bin/b"),
+                PathBuf::from("/usr/bin/a"),
+                PathBuf::from("/usr/bin/a"),
+            ]),
+            [PathBuf::from("/usr/bin/a"), PathBuf::from("/usr/bin/b")]
+        );
+    }
+
+    #[test]
+    fn requires_a_regular_file_with_an_execute_bit() {
+        let directory = crate::test_support::TempDir::new("executable-file");
+        let executable = directory.path().join("executable");
+        let plain = directory.path().join("plain");
+        fs::write(&executable, b"data").unwrap();
+        fs::write(&plain, b"data").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(is_executable_file(&executable));
+        assert!(!is_executable_file(&plain));
+        assert!(!is_executable_file(directory.path()));
     }
 }
